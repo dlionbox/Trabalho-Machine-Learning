@@ -1,0 +1,332 @@
+---
+title: "Online News Popularity"
+author: "AADF"
+date: "12 de novembro de 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+library(ggcorrplot)
+library(caret)
+library(rpart) #arvore
+library(rpart.plot)
+library(ipred) #bagging
+library(randomForest)
+library(xgboost)
+library(Matrix)
+```
+
+```{r}
+dados <- read.csv("OnlineNewsPopularity.csv", header = T)
+```
+
+```{r}
+cols <- c(14:19,32:39)
+
+dados[,cols] <- lapply(dados[,cols], factor)
+rm(cols)
+```
+
+
+```{r}
+dados$url <- NULL
+dados$timedelta <- NULL
+dados <-  dados %>% mutate(data_channel_is_other = ifelse((data_channel_is_bus==0)&
+                                                              (data_channel_is_entertainment==0) &
+                                                              (data_channel_is_lifestyle==0) &
+                                                              (data_channel_is_socmed==0) &
+                                                              (data_channel_is_tech==0) &
+                                                              (data_channel_is_world==0),1,0))
+dados$data_channel_is_other<- as.factor(dados$data_channel_is_other)
+```
+
+```{r}
+#mudando o problema para classifição
+#duas categorias (0 =  não popular | 1 = popular)
+dados <-  dados %>% mutate(popularity2 = ifelse((shares > 1400),1,0))
+dados$popularity2<- as.factor(dados$popularity2)
+
+```
+
+
+```{r}
+dados$boxplot_dias <- rep("Domingo", nrow(dados))
+dados$boxplot_dias[dados$weekday_is_monday==1] <- "Segunda"
+dados$boxplot_dias[dados$weekday_is_tuesday==1] <- "Terca"
+dados$boxplot_dias[dados$weekday_is_wednesday==1] <- "Quarta"
+dados$boxplot_dias[dados$weekday_is_thursday==1] <- "Quinta"
+dados$boxplot_dias[dados$weekday_is_friday==1] <- "Sexta"
+dados$boxplot_dias[dados$weekday_is_saturday==1] <- "Sabado"
+```
+
+```{r}
+#podemos verificar que os dias durante a semana parecem ter o mesmo comportamento, assim como o sabado e o do domingo tambem. Porem ha uma leve diferenca na media entre os dias de semana e os dias de final de semana.
+ggplot(data= dados, aes(as.factor(boxplot_dias), log(shares),fill = as.factor(boxplot_dias))) +
+  geom_boxplot() +
+  ggtitle("Log do número de compartilhamentos por dia da semana") +
+  xlab("Dia da semana") +
+  ylab("Log do número de compartilhamentos") + guides(fill=FALSE)  + theme_bw()+ theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+```{r}
+dados$is_weekend<-NULL
+```
+
+```{r}
+dados$boxplot_natu <- rep("Negocios", nrow(dados))
+dados$boxplot_natu[dados$data_channel_is_entertainment==1] <- "Entretenimento"
+dados$boxplot_natu[dados$data_channel_is_lifestyle==1] <- "Estilo_de_vida"
+dados$boxplot_natu[dados$data_channel_is_other==1] <- "Outros"
+dados$boxplot_natu[dados$data_channel_is_socmed==1] <- "Midia_social"
+dados$boxplot_natu[dados$data_channel_is_tech==1] <- "Tecnologia"
+dados$boxplot_natu[dados$data_channel_is_world==1] <- "Global"
+```
+
+```{r}
+#podemos verificar que as diferentes areas dos artigos parecem ter um comportamento semelhante em relacao ao numero de compartilhamentos. Todavia, não vamos exclui-las.
+ggplot(data= dados, aes(as.factor(boxplot_natu), log(shares), fill= as.factor(boxplot_natu))) +
+  geom_boxplot() +
+  ggtitle("Log do número de compartilhamentos por natureza de artigo") +
+  xlab("Natureza do artigo") +
+  ylab("Log do número de compartilhamentos") + guides(fill=FALSE) + theme_bw() + theme(plot.title = element_text(hjust = 0.5)) 
+
+```
+
+```{r}
+#apagando as duas colunas geradas, pois foram somente para a construcao dos boxplots
+dados$boxplot_dias <- NULL
+dados$boxplot_natu <- NULL
+```
+
+```{r}
+#para fazer a correlacao das variaveis numericas
+#dados_cor <- dados
+#dados_cor[,c(12:17,53,24)] <- NULL
+
+#corr <- round(cor(dados_cor), 2)
+#ggcorrplot(corr, type = "upper", outline.color = "white", lab = FALSE, 
+#           title="Grafico de Correlacao", legend.title = "Correlacao")
+#rm(dados_cor)
+```
+
+```{r}
+#excluindo possiveis outliers
+dados_teste <- dados
+
+#n_unique_tokens ok
+#n_non_stop_words ok
+#n_non_stop_unique_tokens ok
+#dados_teste <- dados_teste %>% filter(n_unique_tokens < 600)
+
+#num_hrefs nao retirar
+#dados_teste <- dados_teste %>% filter(num_hrefs < 250)
+
+#num_self_hrefs nao retirar
+#dados_teste <- dados_teste %>% filter(num_self_hrefs < 100)
+
+#kw_max_min nao retirar
+#dados_teste <- dados_teste %>% filter(kw_max_min < 200000)
+
+#kw_max_avg nao retirar
+#dados_teste <- dados_teste %>% filter(kw_max_avg < 200000)
+
+
+```
+
+
+#Construindo classificadores
+
+```{r}
+#para 2 categorias
+set.seed(333)
+
+dados_teste$shares <- NULL
+
+idx <- createDataPartition(y = dados_teste$popularity2, p=0.7, list=FALSE)
+train = dados_teste[idx, ]
+test = dados_teste[-idx, ]
+rm(idx)
+```
+
+#Arvore de decisao
+
+```{r}
+tree.tr <- rpart(popularity2 ~ ., data=train, method = "class")
+rpart.plot(tree.tr)
+```
+
+```{r}
+cm.tree = confusionMatrix(predict(tree.tr, test, type = "class"), test$popularity2)
+cm.tree$table
+```
+
+```{r}
+cm.tree$overall[1]
+```
+
+#Bagging
+
+```{r}
+bag.tree <- bagging(popularity2 ~ ., nbagg = 160, data=train, coob=TRUE)
+predbag.te <- predict(bag.tree, newdata=test)
+cm.bagtree = confusionMatrix(predbag.te, test$popularity2)
+cm.bagtree$table
+```
+
+```{r}
+cm.bagtree$overall[1]
+```
+
+#Floresta aleatoria
+
+```{r}
+rf.fit = randomForest(popularity2 ~ ., data=train,
+xtest = test[, -59], ytest = test$popularity2,
+ntree=500, mtry=7, importance=TRUE)
+rf.fit$test$confusion
+```
+
+```{r}
+#acuracia
+(rf.fit$test$confusion[1] + rf.fit$test$confusion[4])/(rf.fit$test$confusion[1] + rf.fit$test$confusion[2] + rf.fit$test$confusion[3] + rf.fit$test$confusion[4])
+```
+
+#Gradient boosting
+
+```{r}
+train$popularity2 <- as.numeric(as.character(train$popularity2))
+test$popularity2 <- as.numeric(as.character(test$popularity2))
+```
+
+```{r}
+trainm <- sparse.model.matrix(popularity2 ~.-1, data = train)
+train_label <- train[,"popularity2"]
+train_matrix <- xgb.DMatrix(data = as.matrix(trainm), label = train_label)
+```
+
+```{r}
+testm <- sparse.model.matrix(popularity2 ~.-1, data = test)
+test_label <- test[,"popularity2"]
+test_matrix <- xgb.DMatrix(data = as.matrix(testm), label = test_label)
+```
+
+```{r}
+#parametros
+nc <- length(unique(train_label))
+xgb_params <- list("objective" = "multi:softprob", "eval_metric" = "mlogloss", "num_class" = nc)
+watchlist <- list(train = train_matrix, test = test_matrix)
+```
+
+```{r}
+bst_model <- xgb.train(params = xgb_params,
+ data = train_matrix,
+ watchlist = watchlist, 
+ eta = 0.21,
+ max_depth = 3, 
+ nround= 150,
+ subsample = 0.8,
+ colsample_bytree = 0.7,
+ seed = 333,
+ nthread = 4,
+ gamma = 0.96
+    )
+```
+
+```{r}
+#grafico do treino e teste
+e <- data.frame(bst_model$evaluation_log)
+e %>% ggplot() +
+  geom_point(aes(x = iter, y = train_mlogloss), col = "blue") +
+  geom_point(aes(x = iter, y = test_mlogloss), col = "red" ) +
+  labs(x = "iteracoes", y = "perda")
+```
+
+```{r}
+min(e$test_mlogloss)
+```
+
+```{r}
+e[e$test_mlogloss == min(e$test_mlogloss),]
+```
+
+```{r}
+imp <- xgb.importance(colnames(train_matrix), model = bst_model)
+print(imp)
+```
+
+```{r}
+xgb.ggplot.importance(imp, top_n = 10, n_clusters = 1)  +
+  theme_bw() +
+  ylab("Medida de import?ncia") +
+  xlab("Vari?vel") +
+  theme(legend.position="none") +
+  ggtitle("Import?ncia das vari?veis") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_grey()
+```
+
+```{r}
+p <- predict(bst_model, newdata = test_matrix)
+pred <- matrix(p, nrow = nc, ncol = length(p)/nc) %>%
+  t() %>%
+  data.frame() %>%
+  mutate(label = test_label, max_prob = max.col(., "last")-1)
+```
+
+```{r}
+confu <- table(Prediction = pred$max_prob, Actual = pred$label)
+confu
+```
+
+```{r}
+(confu[1]+confu[4])/sum(confu)
+```
+
+```{r}
+#Gráfico 
+ntree<-c(100,200,300,400,500,100,200,300,400,500)
+mtry<-c(7,7,7,7,7,8,8,8,8,8)
+accuracy<-c(0.6517827,0.6564918 ,  0.6590986,0.6570804,0.6594349 ,0.6506895 ,0.6523713, 0.6553145 , 0.6577531, 0.6593508)
+
+mtry<-as.factor(mtry)
+
+data_accuracy<-data_frame(mtry,ntree,accuracy)
+colnames(data_accuracy)<-c("mtry","ntree", "accuracy")
+data_accuracy<-as.data.frame(data_accuracy)
+
+
+ggplot(data = data_accuracy, aes(x = ntree, y = accuracy, color= mtry)) + theme_bw()  + ggtitle("Acurácia pelo número de árvores") + theme(axis.title = element_text(size = 10)) + geom_line(aes(x= ntree, y = accuracy)) + geom_point(aes(x= ntree, y = accuracy))   +  scale_colour_discrete(name="Nº de variáveis\namostrada por nó") +
+ylim(c(min(data_accuracy$accuracy)-0.002, max(data_accuracy$accuracy))) +
+xlab("Número de árvores") + ylab("Acurácia") + theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+```{r}
+#Grafico
+accuracy<-c(0.644551,0.64741,0.6496805,0.6566599,0.6557349)
+nbag<-c(40,80,120,160,200)
+accuracy.bag<-data_frame(nbag,accuracy)
+colnames(accuracy.bag)<-c("nbag", "accuracy")
+accuracy.bag<-as.data.frame(accuracy.bag)
+
+ggplot(data =accuracy.bag, aes(x = nbag, y = accuracy)) +
+  theme_bw() +
+  scale_x_continuous(breaks = nbag) +
+  ggtitle("Acurácia pelo número de árvores") +
+  xlab("Número de árvores") +
+  ylab("Acurácia") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_point(aes(x= nbag, y = accuracy)) + geom_line(aes(x= nbag, y = accuracy)) + 
+  geom_point(aes(x= nbag[4], y = accuracy[4]), colour = "red")
+
+
+```
